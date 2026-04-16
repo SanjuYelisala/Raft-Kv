@@ -26,6 +26,8 @@ class RaftNode:
         self.last_heartbeat = time.time()
         self.last_log_term = 0
         self.last_log_index = 0
+        self.commit_index = 0
+        self.votes_received = 0
         
         
         
@@ -35,17 +37,27 @@ class RaftNode:
     def check_election_timeout(self):
         
         if self.role == "leader":
+            self.send_heartbeat()
             return
         if time.time() - self.last_heartbeat > self.election_timeout:
             print("Election timeout fired!")
             self.role = "candidate"
             self.current_term += 1
+            self.votes_received = 1
             self.voted_for = self.node_id
             self.last_heartbeat = time.time()
             self.election_timeout = random.uniform(1.0, 3.0)
             r_elect = RaftElection(self.node_id, self.role, self.current_term, self.last_log_index,
                                              self.last_log_term, self.peers,self.server)
-        
+    
+    def send_heartbeat(self):
+        r_message = RaftMessage(self.node_id, self.current_term, self.last_log_index, self.last_log_term)
+        message = r_message.append_entries(self.current_term, self.node_id, self.last_log_index, self.commit_index, [])
+        for peer in self.peers:
+            host, port = peer.split(":")
+            self.server.send(host, int(port), message)
+
+
 
 def main():
     host = sys.argv[1]
