@@ -53,7 +53,7 @@ class NodeServer():
 
         for msg in message:
             decoded_message = msg.decode().strip()
-            self.on_message(json.loads(decoded_message))
+            self.on_message((json.loads(decoded_message)))
             key.fileobj.sendall((decoded_message + "\n").encode())
             
 
@@ -67,6 +67,6 @@ class NodeServer():
             print(f"Peer {host}:{port} is not up yet")
         finally:
             election_socket_server.close()
-            
+                    
 
 
