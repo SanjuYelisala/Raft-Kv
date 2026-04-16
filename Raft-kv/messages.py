@@ -6,7 +6,7 @@ class RaftMessage:
         self.last_log_term = last_log_term
 
     def requestVote_message(self):
-        request_message : {
+        request_message = {
             "message_type" : "request_vote",
             "candidate_id" : self.node_id,
             "term" : self.current_term,
