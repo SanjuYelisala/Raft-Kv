@@ -14,3 +14,14 @@ class RaftMessage:
             "last_log_term" : self.last_log_term
         }
         return request_message
+    
+    def append_entries(self, current_term, node_id, last_log_index, commit_index,entries):
+        append_entries_message = {
+            "message_type": "append_entries",
+            "term": current_term,
+            "leader_id": node_id,
+            "last_log_index": last_log_index,
+            "commit_index":commit_index,
+            "entries": entries
+        }
+        return append_entries_message
