@@ -1,3 +1,5 @@
+from messages import RaftMessage
+
 class RaftElection:
     def __init__(self, node_id, role, current_term,last_log_index, last_log_term, peers, server):
         self.node_id = node_id
