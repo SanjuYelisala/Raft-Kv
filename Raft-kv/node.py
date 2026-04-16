@@ -3,7 +3,7 @@ import sys
 import selectors
 import json
 
-from connection.py import feed
+from connection import Connection
 
 
 class NodeServer():
@@ -22,16 +22,16 @@ class NodeServer():
         server.bind((self.host, self.port))
         server.listen(1024)
 
-        self.sel.register(server, selectors.EVENT_READ,self.accept)
+        self.sel.register(server, selectors.EVENT_READ,None)
         while True:
             events = self.sel.select(timeout=0.1) # returns after 0.1 seconds even if no events
 
             if not events:
                 self.on_tick()
             for key, mask in events:
-                if key.data is self.accept:  # server socket
+                if key.data is None:
                     self.accept(key.fileobj)
-                else:  # client socket
+                else:
                     self.read(key)
                     
     def accept(self, sock):
@@ -41,11 +41,13 @@ class NodeServer():
         self.sel.register(conn, selectors.EVENT_READ, connection)
 
     def read(self, key):
-        raw = key.fileobj.recv(128)
-        if not raw:
+        try:
+            raw = key.fileobj.recv(128)
+        except ConnectionResetError:
             self.sel.unregister(key.fileobj)
             key.fileobj.close()
             return
+        
         message = key.data.feed(raw)
         
 
@@ -58,8 +60,13 @@ class NodeServer():
     
     def send(self, host, port, message):
         election_socket_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        election_socket_server.connect((host, port))
-        election_socket_server.sendall((json.dumps(message) + "\n").encode())
+        try:
+            election_socket_server.connect((host, port))
+            election_socket_server.sendall((json.dumps(message) + "\n").encode())
+        except ConnectionRefusedError:
+            print(f"Peer {host}:{port} is not up yet")
+        finally:
+            election_socket_server.close()
             
 
 
