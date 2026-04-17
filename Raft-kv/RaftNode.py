@@ -7,6 +7,8 @@ from node import NodeServer
 from messages import RaftMessage
 from election import RaftElection
 from message_handler import MessageHandler
+from kv_store import KVStore
+from log_store import Log
 
 class RaftNode:
     def __init__(self, host, port, peers):
@@ -28,7 +30,9 @@ class RaftNode:
         self.last_log_index = 0
         self.commit_index = 0
         self.votes_received = 0
-        
+
+        self.r_kvstore = KVStore()
+        self.r_log = Log()
         
         
     def start(self):
