@@ -41,9 +41,21 @@ class MessageHandler:
             value = " ".join(commands[2:])
 
             if command == 'SET':
-                response = self.r_node.r_kvstore.set_command(key, value)
+                log_entry = {
+                    "index" : self.r_node.r_log.last_index_log() + 1,
+                    "term" : self.r_node.current_term,
+                    "command" : {"action": "set", "key": key, "value": value}
+
+                }
+                self.r_node.r_log.append_log(log_entry)
+                self.r_node.pending_clients[log_entry["index"]] = sock
+                self.r_node.replicate_log(log_entry)
+                
+                
+                
+                '''response = self.r_node.r_kvstore.set_command(key, value)
                 print(f"Sending response: {response}")
-                sock.sendall((response + "\n").encode())
+                sock.sendall((response + "\n").encode())'''
             elif command == "GET":
                 response = self.r_node.r_kvstore.get_command(key)
                 if response is None:
@@ -100,7 +112,7 @@ class MessageHandler:
 
     
     def handle_append_entries(self, message):
-        print(f"Heartbeat received from {message['leader_id']}")
+    # always reset heartbeat and update term
         self.r_node.last_heartbeat = time.time()
         if message["term"] >= self.r_node.current_term:
             self.r_node.current_term = message["term"]
@@ -108,14 +120,50 @@ class MessageHandler:
             success = True
         else:
             success = False
+
+        # handle log entries if present
+        log_index = None
+        if message["entries"]:
+            for entry in message["entries"]:
+                log_index = self.r_node.r_log.append_log(entry)
+
         acknowledgement = {
-                "message_type": "append_response",
-                "term": self.r_node.current_term,
-                "success": success
-                }
+            "message_type": "append_response",
+            "term": self.r_node.current_term,
+            "success": success,
+            "log_index": log_index
+        }
         host, port = message["leader_id"].split(":")
         self.r_node.server.send(host, int(port), acknowledgement)
 
 
     def handle_append_response(self, message):
-        print(f"Acknowledgement received with success field as {message['success']}")
+        if not message["success"]:
+            return
+        
+        log_index = message["log_index"]
+        if log_index is None:  # heartbeat response, nothing to commit
+            return
+
+        # increment confirmation count for this log index
+        if log_index not in self.r_node.log_confirmations:
+            self.r_node.log_confirmations[log_index] = 1  # leader already counts as 1
+        self.r_node.log_confirmations[log_index] += 1
+
+        total_nodes = len(self.r_node.peers) + 1
+        majority = (total_nodes // 2) + 1
+
+        if self.r_node.log_confirmations[log_index] >= majority:
+            # commit — apply to KV store
+            log_entry = self.r_node.r_log.get_log(log_index - 1)  # log is 0-indexed
+            if log_entry:
+                command = log_entry["command"]
+                self.r_node.r_kvstore.set_command(command["key"], command["value"])
+                self.r_node.commit_index = log_index
+                
+                # respond to waiting client
+                sock = self.r_node.pending_clients.pop(log_index, None)
+                if sock:
+                    sock.sendall(f"{command['key']} committed successfully\n".encode())
+
+
