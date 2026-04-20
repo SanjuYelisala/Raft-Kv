@@ -35,6 +35,8 @@ class RaftNode:
         self.r_kvstore = KVStore()
         self.r_log = Log()
         
+        self.pending_clients = {}
+        self.log_confirmations = {}  # {log_index: count}
         
     def start(self):
         self.server.start()
@@ -65,6 +67,13 @@ class RaftNode:
             host, port = peer.split(":")
             self.server.send(host, int(port), message)
 
+    def replicate_log(self, log_entry):
+        print(f"Replicating log to peers: {self.peers}")
+        r_message = RaftMessage(self.node_id, self.current_term, self.last_log_index, self.last_log_term)
+        message = r_message.append_entries(self.current_term, self.node_id, self.last_log_index, self.commit_index, [log_entry])
+        for peer in self.peers:
+            host, port = peer.split(":")
+            self.server.send(host, int(port), message)
 
 
 def main():
