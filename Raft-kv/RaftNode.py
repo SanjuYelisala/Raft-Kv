@@ -50,11 +50,12 @@ class RaftNode:
             self.votes_received = 1
             self.voted_for = self.node_id
             self.last_heartbeat = time.time()
-            self.election_timeout = random.uniform(1.0, 3.0)
+            self.election_timeout = random.uniform(1.0, 5.0)
             r_elect = RaftElection(self.node_id, self.role, self.current_term, self.last_log_index,
                                              self.last_log_term, self.peers,self.server)
     
     def send_heartbeat(self):
+        print(f"Sending heartbeat to peers: {self.peers}")
         r_message = RaftMessage(self.node_id, self.current_term, self.last_log_index, self.last_log_term)
         message = r_message.append_entries(self.current_term, self.node_id, self.last_log_index, self.commit_index, [])
         for peer in self.peers:
@@ -71,7 +72,7 @@ def main():
         config = json.load(f)
     peers = []
     for peer in config["nodes"]:
-        if peer["port"] != str(port):
+        if peer["port"] != port:
             peers.append(f"{peer['host']}:{peer['port']}")
 
     r_node = RaftNode(host, port, peers)
