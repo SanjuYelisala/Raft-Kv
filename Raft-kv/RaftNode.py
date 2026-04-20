@@ -26,6 +26,7 @@ class RaftNode:
         self.election_timeout = random.uniform(1.0, 3.0)
 
         self.last_heartbeat = time.time()
+        self.last_heartbeat_sent = time.time()
         self.last_log_term = 0
         self.last_log_index = 0
         self.commit_index = 0
@@ -41,7 +42,9 @@ class RaftNode:
     def check_election_timeout(self):
         
         if self.role == "leader":
-            self.send_heartbeat()
+            if time.time() - self.last_heartbeat_sent > 0.5:
+                self.send_heartbeat()
+                self.last_heartbeat_sent = time.time()
             return
         if time.time() - self.last_heartbeat > self.election_timeout:
             print("Election timeout fired!")
