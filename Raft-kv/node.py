@@ -1,111 +1,72 @@
-import time
+import socket
 import sys
-import random
+import selectors
 import json
 
-from node import NodeServer
-from messages import RaftMessage
-from election import RaftElection
-from message_handler import MessageHandler
-from kv_store import KVStore
-from log_store import Log
+from connection import Connection
 
-class RaftNode:
-    def __init__(self, host, port, peers):
-        self.node_id = f"{host}:{port}"
+
+class NodeServer():
+    def __init__(self, host, port, on_tick, on_message):
         self.host = host
         self.port = port
-        self.role = "follower"
-        self.peers = peers
+        self.on_tick = on_tick
+        self.on_message = on_message
 
-        self.current_term = 0
-        self.voted_for = None
+        self.sel = selectors.DefaultSelector()
 
-        self.message_handler = MessageHandler(self)
-        self.server = NodeServer(host, port, self.check_election_timeout, self.message_handler.handle)
-        self.election_timeout = random.uniform(1.0, 3.0)
 
-        self.last_heartbeat = time.time()
-        self.last_heartbeat_sent = time.time()
-        self.last_log_term = 0
-        self.last_log_index = 0
-        self.commit_index = 0
-        self.votes_received = 0
-
-        self.r_kvstore = KVStore()
-        self.r_log = Log()
-        
-        self.pending_clients = {}
-        self.log_confirmations = {}  # {log_index: count}
-        self.next_index = {}
-
-        
     def start(self):
-        self.server.start()
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setblocking(False)
+        server.bind((self.host, self.port))
+        server.listen(1024)
 
-    def check_election_timeout(self):
-        
-        if self.role == "leader":
-            if time.time() - self.last_heartbeat_sent > 0.5:
-                self.send_heartbeat()
-                self.last_heartbeat_sent = time.time()
+        self.sel.register(server, selectors.EVENT_READ,None)
+        while True:
+            events = self.sel.select(timeout=0.1) # returns after 0.1 seconds even if no events
+
+            self.on_tick()
+            for key, mask in events:
+                if key.data is None:
+                    self.accept(key.fileobj)
+                else:
+                    self.read(key)
+                    
+    def accept(self, sock):
+        conn, addr = sock.accept()
+        conn.setblocking(False)
+        connection = Connection()
+        self.sel.register(conn, selectors.EVENT_READ, connection)
+
+    def read(self, key):
+        try:
+            raw = key.fileobj.recv(128)
+        except ConnectionResetError:
+            self.sel.unregister(key.fileobj)
+            key.fileobj.close()
             return
-        if time.time() - self.last_heartbeat > self.election_timeout:
-            print("Election timeout fired!")
-            self.role = "candidate"
-            self.current_term += 1
-            self.votes_received = 1
-            self.voted_for = self.node_id
-            self.last_heartbeat = time.time()
-            self.election_timeout = random.uniform(1.0, 5.0)
-            r_elect = RaftElection(self.node_id, self.role, self.current_term, self.last_log_index,
-                                             self.last_log_term, self.peers,self.server)
-    
-    def send_heartbeat(self):
-        print(f"Leader log: {self.r_log.logs}")
-        print(f"Sending heartbeat to peers: {self.peers}")
-        r_message = RaftMessage(self.node_id, self.current_term, self.last_log_index, self.last_log_term)
-
-
-        for peer in self.peers:
-            print(f"peer={peer}, next_index={self.next_index.get(peer)}, last_log={self.r_log.last_index_log()}")
-            if peer not in self.next_index:
-                self.next_index[peer] = 1  # new peer, send from beginning
-            host, port = peer.split(":")
-            if self.next_index[peer] < self.r_log.last_index_log() + 1:
-                if self.next_index[peer] > 0:
-                    message = r_message.append_entries(self.current_term, self.node_id, self.last_log_index, self.commit_index, self.r_log.get_entries_from(self.next_index[peer] - 1))
-                
-            else:
-                message = r_message.append_entries(self.current_term, self.node_id, self.last_log_index, self.commit_index, [])
-            self.server.send(host, int(port), message)
         
+        message = key.data.feed(raw)
+        
+
+        for msg in message:
+            decoded_message = msg.decode().strip()
+            self.on_message((decoded_message), key.fileobj)
+            #key.fileobj.sendall((decoded_message + "\n").encode())
             
 
-    def replicate_log(self, log_entry):
-        self.last_log_index = self.r_log.last_index_log()
-        print(f"Replicating log to peers: {self.peers}")
-        r_message = RaftMessage(self.node_id, self.current_term, self.last_log_index, self.last_log_term)
-        message = r_message.append_entries(self.current_term, self.node_id, self.last_log_index, self.commit_index, [log_entry])
-        for peer in self.peers:
-            host, port = peer.split(":")
-            self.server.send(host, int(port), message)
-        
-
-def main():
-    host = sys.argv[1]
-    port = int(sys.argv[2])
-
-    with open("config/peers.json") as f:
-        config = json.load(f)
-    peers = []
-    for peer in config["nodes"]:
-        if peer["port"] != port:
-            peers.append(f"{peer['host']}:{peer['port']}")
-
-    r_node = RaftNode(host, port, peers)
-    r_node.start()
     
+    def send(self, host, port, message):
+        election_socket_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        election_socket_server.settimeout(0.5)
 
-if __name__ == "__main__":
-    main()
+        try:
+            election_socket_server.connect((host, port))
+            election_socket_server.sendall((json.dumps(message) + "\n").encode())
+        except (ConnectionRefusedError, TimeoutError, OSError):
+            print(f"Peer {host}:{port} is not up yet")
+        finally:
+            election_socket_server.close()
+                    
+
