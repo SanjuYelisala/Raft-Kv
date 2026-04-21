@@ -37,6 +37,8 @@ class RaftNode:
         
         self.pending_clients = {}
         self.log_confirmations = {}  # {log_index: count}
+        self.next_index = {}
+
         
     def start(self):
         self.server.start()
@@ -60,21 +62,35 @@ class RaftNode:
                                              self.last_log_term, self.peers,self.server)
     
     def send_heartbeat(self):
+        print(f"Leader log: {self.r_log.logs}")
         print(f"Sending heartbeat to peers: {self.peers}")
         r_message = RaftMessage(self.node_id, self.current_term, self.last_log_index, self.last_log_term)
-        message = r_message.append_entries(self.current_term, self.node_id, self.last_log_index, self.commit_index, [])
+
+
         for peer in self.peers:
+            print(f"peer={peer}, next_index={self.next_index.get(peer)}, last_log={self.r_log.last_index_log()}")
+            if peer not in self.next_index:
+                self.next_index[peer] = 1  # new peer, send from beginning
             host, port = peer.split(":")
+            if self.next_index[peer] < self.r_log.last_index_log() + 1:
+                if self.next_index[peer] > 0:
+                    message = r_message.append_entries(self.current_term, self.node_id, self.last_log_index, self.commit_index, self.r_log.get_entries_from(self.next_index[peer] - 1))
+                
+            else:
+                message = r_message.append_entries(self.current_term, self.node_id, self.last_log_index, self.commit_index, [])
             self.server.send(host, int(port), message)
+        
+            
 
     def replicate_log(self, log_entry):
+        self.last_log_index = self.r_log.last_index_log()
         print(f"Replicating log to peers: {self.peers}")
         r_message = RaftMessage(self.node_id, self.current_term, self.last_log_index, self.last_log_term)
         message = r_message.append_entries(self.current_term, self.node_id, self.last_log_index, self.commit_index, [log_entry])
         for peer in self.peers:
             host, port = peer.split(":")
             self.server.send(host, int(port), message)
-
+        
 
 def main():
     host = sys.argv[1]
