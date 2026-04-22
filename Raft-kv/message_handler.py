@@ -48,6 +48,7 @@ class MessageHandler:
 
                 }
                 self.r_node.r_log.append_log(log_entry)
+                self.r_node.storage.append_entry(log_entry)
                 self.r_node.pending_clients[log_entry["index"]] = sock
                 self.r_node.replicate_log(log_entry)
                 
@@ -77,6 +78,7 @@ class MessageHandler:
             self.r_node.current_term = message["term"]
             self.r_node.role = "follower"
             self.r_node.voted_for = None
+            self.r_node.storage.save_state(self.r_node.current_term, self.r_node.voted_for, self.r_node.commit_index)
 
         # grant vote if term is valid and we haven't voted for someone else
         if (message["term"] >= self.r_node.current_term and
@@ -122,6 +124,7 @@ class MessageHandler:
             self.r_node.current_term = message["term"]
             self.r_node.role = "follower"
             success = True
+            self.r_node.storage.save_state(self.r_node.current_term, self.r_node.voted_for, self.r_node.commit_index)
         else:
             success = False
 
@@ -130,6 +133,7 @@ class MessageHandler:
         if message["entries"]:
             for entry in message["entries"]:
                 log_index = self.r_node.r_log.append_log(entry)
+                self.r_node.storage.append_entry(entry)
         self.r_node.last_log_index = self.r_node.r_log.last_index_log()
         acknowledgement = {
             "message_type": "append_response",
@@ -180,6 +184,11 @@ class MessageHandler:
                     command = log_entry["command"]
                     self.r_node.r_kvstore.set_command(command["key"], command["value"])
                     self.r_node.commit_index = log_index
+                    self.r_node.storage.save_state(
+                        self.r_node.current_term,
+                        self.r_node.voted_for,
+                        self.r_node.commit_index
+                    )
                     print(f"Committing log entry: {log_entry}")
                     # respond to waiting client
                     sock = self.r_node.pending_clients.pop(log_index, None)

@@ -9,6 +9,7 @@ from election import RaftElection
 from message_handler import MessageHandler
 from kv_store import KVStore
 from log_store import Log
+from storage import RaftStorage
 
 class RaftNode:
     def __init__(self, host, port, peers):
@@ -39,6 +40,21 @@ class RaftNode:
         self.log_confirmations = {}  # {log_index: count}
         self.next_index = {}
 
+        self.storage = RaftStorage(self.node_id)
+        state = self.storage.load_state()
+        print(f"Loaded state: {state}")
+        self.current_term = state["current_term"]
+        self.voted_for = state["voted_for"]
+        self.commit_index = state["commit_index"]
+
+        logs = self.storage.load_logs()
+        print(f"Loaded logs: {logs}")
+        for entry in logs:
+            self.r_log.append_log(entry)
+            if entry["index"] <= self.commit_index:
+                command = entry["command"]
+                self.r_kvstore.set_command(command["key"], command["value"])
+
         
     def start(self):
         self.server.start()
@@ -56,6 +72,7 @@ class RaftNode:
             self.current_term += 1
             self.votes_received = 1
             self.voted_for = self.node_id
+            self.storage.save_state(self.current_term, self.voted_for, self.commit_index)
             self.last_heartbeat = time.time()
             self.election_timeout = random.uniform(1.0, 5.0)
             r_elect = RaftElection(self.node_id, self.role, self.current_term, self.last_log_index,
