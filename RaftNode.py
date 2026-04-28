@@ -1,0 +1,180 @@
+import time
+import sys
+import random
+import json
+
+from node import NodeServer
+from messages import RaftMessage
+from election import RaftElection
+from message_handler import MessageHandler
+from kv_store import KVStore
+from log_store import Log
+from storage import RaftStorage
+
+class RaftNode:
+    def __init__(self, host, port, peers):
+        self.node_id = f"{host}:{port}"
+        self.host = host
+        self.port = port
+        self.role = "follower"
+        self.peers = peers
+
+        self.current_term = 0
+        self.voted_for = None
+
+        self.message_handler = MessageHandler(self)
+        self.server = NodeServer(host, port, self.check_election_timeout, self.message_handler.handle)
+        self.election_timeout = random.uniform(1.0, 3.0)
+
+        self.last_heartbeat = time.time()
+        self.last_heartbeat_sent = time.time()
+        self.last_log_term = 0
+        self.last_log_index = 0
+        self.commit_index = 0
+        self.votes_received = 0
+
+        self.r_kvstore = KVStore()
+        self.r_log = Log()
+        
+        self.pending_clients = {}
+        self.log_confirmations = {}  # {log_index: count}
+        self.next_index = {}
+
+
+        self.storage = RaftStorage(self.node_id)
+        state = self.storage.load_state()
+        print(f"Loaded state: {state}")
+        self.current_term = state["current_term"]
+        self.voted_for = state["voted_for"]
+        self.commit_index = state["commit_index"]
+
+        self.snapshot_index = 0
+        self.snapshot_term = 0
+
+        # load snapshot first
+        snapshot = self.storage.load_snapshot()
+        self.snapshot_index = snapshot["snapshot_index"]
+        self.snapshot_term = snapshot["term"]
+        if snapshot["kv_data"]:
+            self.r_kvstore.key_store = snapshot["kv_data"]
+
+        # then replay only log entries after snapshot
+        logs = self.storage.load_logs()
+        #print(f"Loaded logs: {logs}")
+        for entry in logs:
+            self.r_log.append_log(entry)
+            if entry["index"] <= self.commit_index and entry["index"] > self.snapshot_index:
+                command = entry["command"]
+                self.r_kvstore.set_command(command["key"], command["value"])
+
+        self.current_leader = None
+
+
+
+
+    def start(self):
+        self.server.start()
+
+    def check_election_timeout(self):
+        
+        if self.role == "leader":
+            if time.time() - self.last_heartbeat_sent > 0.5:
+                self.send_heartbeat()
+                self.last_heartbeat_sent = time.time()
+            return
+        if time.time() - self.last_heartbeat > self.election_timeout:
+            print("Election timeout fired!")
+            self.role = "candidate"
+            self.current_term += 1
+            self.votes_received = 1
+            self.voted_for = self.node_id
+            self.storage.save_state(self.current_term, self.voted_for, self.commit_index)
+            self.last_heartbeat = time.time()
+            self.election_timeout = random.uniform(1.0, 5.0)
+            r_elect = RaftElection(self.node_id, self.role, self.current_term, self.last_log_index,
+                                             self.last_log_term, self.peers,self.server)
+    
+    def send_heartbeat(self):
+        #print(f"Leader log: {self.r_log.logs}")
+        #print(f"Sending heartbeat to peers: {self.peers}")
+        r_message = RaftMessage(self.node_id, self.current_term, self.last_log_index, self.last_log_term)
+        message = r_message.append_entries(self.current_term, self.node_id, self.last_log_index, self.last_log_term, self.commit_index, [])
+
+        for peer in self.peers:
+            if peer not in self.next_index:
+                self.next_index[peer] = 1
+            if self.next_index[peer] <= self.snapshot_index:
+                # send snapshot instead
+                print(f"peer={peer}, next_index={self.next_index.get(peer)}, snapshot_index={self.snapshot_index}")
+                self.send_snapshot(peer)
+                continue
+            host, port = peer.split(":")
+            true_last_index = self.snapshot_index + self.r_log.last_index_log()
+            if self.next_index[peer] <= true_last_index and self.next_index[peer] > 0:
+                message = r_message.append_entries(self.current_term, self.node_id, self.last_log_index, self.last_log_term, self.commit_index, self.r_log.get_entries_from(self.next_index[peer] - 1))
+            else:
+                message = r_message.append_entries(self.current_term, self.node_id, self.last_log_index, self.last_log_term, self.commit_index, [])
+            self.server.send(host, int(port), message)
+            
+
+    def replicate_log(self, log_entry):
+        self.last_log_index = self.r_log.last_index_log()
+        #print(f"Replicating log to peers: {self.peers}")
+        r_message = RaftMessage(self.node_id, self.current_term, self.last_log_index, self.last_log_term)
+        message = r_message.append_entries(self.current_term, self.node_id, self.last_log_index, self.last_log_term, self.commit_index, [log_entry])
+        for peer in self.peers:
+            host, port = peer.split(":")
+            self.server.send(host, int(port), message)
+    
+    def maybe_snapshot(self):
+        print(f"Before snapshot: log_size={len(self.r_log.logs)}, last_log_index={self.last_log_index}")
+        if len(self.r_log.logs) >= 3:
+            self.take_snapshot()
+        print(f"After snapshot: log_size={len(self.r_log.logs)}, snapshot_index={self.snapshot_index}")
+
+    def take_snapshot(self):
+        self.snapshot_index = self.r_log.last_index_log() + self.snapshot_index
+        self.snapshot_term = self.r_log.last_term_log()
+        self.last_log_index = self.snapshot_index
+        kv_data = self.r_kvstore.key_store
+        self.storage.save_snapshot(self.snapshot_index, self.snapshot_term, kv_data)
+        # trim the log
+        self.r_log.logs = []
+        #clear log file
+        with open(self.storage.log_file, "w") as f:
+            json.dump([], f)
+        # reset next_index for all peers
+        for peer in self.peers:
+            self.next_index[peer] = self.snapshot_index + 1
+
+    def send_snapshot(self, peer):
+        snapshot = self.storage.load_snapshot()
+        snap_msg = {
+            "message_type": "install_snapshot",
+            "term": self.current_term,
+            "leader_id": self.node_id,
+            "snapshot_index": snapshot["snapshot_index"],
+            "snapshot_term": snapshot["term"],
+            "kv_data": snapshot["kv_data"]
+        }
+        host, port = peer.split(":")
+        self.server.send(host, int(port), snap_msg)
+
+
+def main():
+    host = sys.argv[1]
+    port = int(sys.argv[2])
+
+    with open("config/peers.json") as f:
+        config = json.load(f)
+    peers = []
+    for peer in config["nodes"]:
+        if peer["port"] != port:
+            peers.append(f"{peer['host']}:{peer['port']}")
+
+    r_node = RaftNode(host, port, peers)
+    r_node.start()
+    
+
+if __name__ == "__main__":
+    main()
