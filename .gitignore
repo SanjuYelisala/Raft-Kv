@@ -1,0 +1,7 @@
+data/
+snapshots/
+__pycache__/
+*.pyc
+.DS_Store
+raft-dashboard/node_modules/
+raft-dashboard/dist/

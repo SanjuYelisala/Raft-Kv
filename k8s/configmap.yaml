@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: raft-config
+data:
+  peers.json: |
+    {
+      "nodes": [
+        {"host": "raft-0.raft", "port": 5001},
+        {"host": "raft-1.raft", "port": 5001},
+        {"host": "raft-2.raft", "port": 5001}
+      ]
+    }

@@ -1,0 +1,7 @@
+{
+    "nodes": [
+        {"host": "node1", "port": 5001},
+        {"host": "node2", "port": 5002},
+        {"host": "node3", "port": 5003}
+    ]
+}

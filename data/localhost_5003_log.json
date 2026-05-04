@@ -1,1 +1,0 @@
-[{"index": 1, "term": 6, "command": {"action": "set", "key": "a", "value": "1"}}, {"index": 2, "term": 6, "command": {"action": "set", "key": "b", "value": "2"}}, {"index": 3, "term": 6, "command": {"action": "set", "key": "c", "value": "3"}}]

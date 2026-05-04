@@ -19,7 +19,7 @@ class NodeServer():
     def start(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setblocking(False)
-        server.bind((self.host, self.port))
+        server.bind(("0.0.0.0", self.port))
         server.listen(1024)
 
         self.sel.register(server, selectors.EVENT_READ,None)

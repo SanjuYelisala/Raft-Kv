@@ -1,0 +1,31 @@
+version: '3'
+environment:
+  - PEERS_CONFIG=config/peers-docker.json
+services:
+  node1:
+    build: .
+    command: python3 RaftNode.py node1 5001
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./data:/app/data
+      - ./snapshots:/app/snapshots
+
+  node2:
+    build: .
+    command: python3 RaftNode.py node2 5002
+    ports:
+      - "5002:5002"
+    volumes:
+      - ./data:/app/data
+      - ./snapshots:/app/snapshots
+
+  node3:
+    build: .
+    command: python3 RaftNode.py node3 5003
+    ports:
+      - "5003:5003"
+    volumes:
+      - ./data:/app/data
+      - ./snapshots:/app/snapshots
+

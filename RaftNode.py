@@ -2,6 +2,7 @@ import time
 import sys
 import random
 import json
+import os
 
 from node import NodeServer
 from messages import RaftMessage
@@ -23,7 +24,7 @@ class RaftNode:
         self.voted_for = None
 
         self.message_handler = MessageHandler(self)
-        self.server = NodeServer(host, port, self.check_election_timeout, self.message_handler.handle)
+        self.server = NodeServer("0.0.0.0", port, self.check_election_timeout, self.message_handler.handle)
         self.election_timeout = random.uniform(1.0, 3.0)
 
         self.last_heartbeat = time.time()
@@ -74,6 +75,17 @@ class RaftNode:
 
     def start(self):
         self.server.start()
+    
+    def shutdown(self):
+        print(f"Shutting down {self.node_id}...")
+        # save state to disk
+        self.storage.save_state(self.current_term, self.voted_for, self.commit_index)
+        # close all peer connections
+        for conn in self.server.connections.values():
+            conn.close()
+        # close the selector
+        self.server.sel.close()
+        print(f"Shutdown complete")
 
     def check_election_timeout(self):
         
@@ -111,7 +123,8 @@ class RaftNode:
             host, port = peer.split(":")
             true_last_index = self.snapshot_index + self.r_log.last_index_log()
             if self.next_index[peer] <= true_last_index and self.next_index[peer] > 0:
-                message = r_message.append_entries(self.current_term, self.node_id, self.last_log_index, self.last_log_term, self.commit_index, self.r_log.get_entries_from(self.next_index[peer] - 1))
+                relative_index = self.next_index[peer] - self.snapshot_index - 1
+                message = r_message.append_entries(self.current_term, self.node_id, self.last_log_index, self.last_log_term, self.commit_index, self.r_log.get_entries_from(relative_index))
             else:
                 message = r_message.append_entries(self.current_term, self.node_id, self.last_log_index, self.last_log_term, self.commit_index, [])
             self.server.send(host, int(port), message)
@@ -133,6 +146,8 @@ class RaftNode:
         print(f"After snapshot: log_size={len(self.r_log.logs)}, snapshot_index={self.snapshot_index}")
 
     def take_snapshot(self):
+        import traceback
+        traceback.print_stack()
         self.snapshot_index = self.r_log.last_index_log() + self.snapshot_index
         self.snapshot_term = self.r_log.last_term_log()
         self.last_log_index = self.snapshot_index
@@ -162,18 +177,24 @@ class RaftNode:
 
 
 def main():
+    
     host = sys.argv[1]
     port = int(sys.argv[2])
-
-    with open("config/peers.json") as f:
+    
+    config_file = os.getenv("PEERS_CONFIG", "config/peers.json")
+    with open(config_file) as f:
         config = json.load(f)
+
     peers = []
     for peer in config["nodes"]:
         if peer["port"] != port:
             peers.append(f"{peer['host']}:{peer['port']}")
-
+    print(f"Node {host} peers: {peers}")
     r_node = RaftNode(host, port, peers)
-    r_node.start()
+    try:
+        r_node.start()
+    except KeyboardInterrupt:
+        r_node.shutdown()
     
 
 if __name__ == "__main__":

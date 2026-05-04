@@ -39,8 +39,8 @@ class MessageHandler:
                 print(f"Empty commands received")
                 return
             command = commands[0].upper()
-            key = commands[1]
-            value = " ".join(commands[2:])
+            key = commands[1] if len(commands) > 1 else None
+            value = " ".join(commands[2:]) if len(commands) > 2 else None
             if self.r_node.role != "leader" and command == 'SET':
                 leader = self.r_node.current_leader
                 if leader:
@@ -50,7 +50,7 @@ class MessageHandler:
                 return
             if command == 'SET':
                 log_entry = {
-                    "index" : self.r_node.r_log.last_index_log() + 1,
+                    "index": self.r_node.snapshot_index + self.r_node.r_log.last_index_log() + 1,
                     "term" : self.r_node.current_term,
                     "command" : {"action": "set", "key": key, "value": value}
 
@@ -76,6 +76,17 @@ class MessageHandler:
                 if response is None:
                     response =  "NOT FOUND"
                 sock.sendall((response + "\n").encode())
+            elif command == "STATUS":
+                status = {
+                    "node_id": self.r_node.node_id,
+                    "role": self.r_node.role,
+                    "term": self.r_node.current_term,
+                    "commit_index": self.r_node.commit_index,
+                    "log_size": len(self.r_node.r_log.logs),
+                    "snapshot_index": self.r_node.snapshot_index,
+                    "leader": self.r_node.current_leader
+                }
+                sock.sendall((str(status) + "\n").encode())
             else:
                 print(f"Command Not Recognized")
             
@@ -165,7 +176,8 @@ class MessageHandler:
         # apply any newly committed entries to KV store
         if message["commit_index"] > self.r_node.commit_index:
             for i in range(self.r_node.commit_index, message["commit_index"]):
-                entry = self.r_node.r_log.get_log(i)
+                adjusted = i - self.r_node.snapshot_index
+                entry = self.r_node.r_log.get_log(adjusted)
                 if entry:
                     command = entry["command"]
                     print(f"Applying entry to KV: {entry}")
@@ -186,7 +198,9 @@ class MessageHandler:
             return
         else:
             if message["success"] == True:
-                self.r_node.next_index[message["node_id"]] = log_index + 1
+                new_next = log_index + 1
+                if new_next > self.r_node.next_index.get(message["node_id"], 0):
+                    self.r_node.next_index[message["node_id"]] = new_next
             else:
                 if message["log_index"] is None and message["node_id"] in self.r_node.next_index:
                     self.r_node.next_index[message["node_id"]] -= 1
@@ -209,15 +223,12 @@ class MessageHandler:
                     self.r_node.r_kvstore.set_command(command["key"], command["value"])
                     self.r_node.commit_index = log_index
                     self.r_node.maybe_snapshot()
-                    self.r_node.storage.save_state(
-                        self.r_node.current_term,
-                        self.r_node.voted_for,
-                        self.r_node.commit_index
-                    )
+                    self.r_node.storage.save_state(self.r_node.current_term, self.r_node.voted_for,self.r_node.commit_index)
                     sock = self.r_node.pending_clients.pop(log_index, None)
-                    print(f"Committing log entry: {log_entry}, sock={sock}")
                     if sock:
                         sock.sendall(f"{command['key']} committed successfully\n".encode())
+                # always delete confirmations regardless
+                del self.r_node.log_confirmations[log_index]
 
     def handle_install_snapshot(self, snap):
         if snap["term"] > self.r_node.current_term:
@@ -244,5 +255,6 @@ class MessageHandler:
         self.r_node.server.send(host, int(port), response)
 
     def handle_snapshot_response(self, snap_response):
+        print(f"snapshot_response: setting next_index[{snap_response['node_id']}] = {self.r_node.snapshot_index + 1}")
         self.r_node.next_index[snap_response["node_id"]] = self.r_node.snapshot_index + 1
 
